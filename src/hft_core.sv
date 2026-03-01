@@ -41,31 +41,34 @@ module hft_core (
     logic [95:0] packet;
     logic comp_packet;
     
-    logic [7:0] msg_type, side, flags;
+    // ADDED 'flags' back into the declarations
+    logic [7:0] msg_type, side, flags; 
     logic [15:0] token, quantity;
     logic [23:0] price;
     logic parse_valid;
 
     // Instantiate Assembler
     packet_assembler ASSEMBLER (
-        .clk(clk), .reset(reset),
+        .clk(clk), 
+        .reset(reset),
         .uart_byte(rx_data),
-        .rx_valid(rx_valid), 
+        .rx_data_valid(rx_valid), 
         .packet(packet),
-        .comp_packet(comp_packet)
+        .packet_valid(comp_packet)
     );
 
     // Instantiate Parser
     parsing PARSER (
-        .clk(clk), .reset(reset),
-        .packet(packet),
-        .comp_packet(comp_packet),
+        .clk(clk), 
+        .reset(reset),
+        .packet_in(packet),             
+        .packet_valid_in(comp_packet),  
         .msg_type(msg_type),
         .side(side),
-        .flags(flags),
         .token(token),
         .quantity(quantity),
         .price(price),
+        .flags(flags),                  // NEW: Hooking up the flags output!
         .parse_valid(parse_valid)
     );
 
@@ -93,19 +96,18 @@ module hft_core (
         .busy(book_busy)
     );
 
-    // --- 3. Output/Response Logic ---
-    // We want to send the new Best Bid price back to the PC *after* the order book finishes writing to BRAM.
-    logic book_busy_q;
-    
-    always_ff @(posedge clk) begin
-        if (reset) book_busy_q <= 0;
-        else book_busy_q <= book_busy;
-    end
-    
-    // Falling Edge Detector: Triggers exactly ONE clock cycle after the order book finishes its operations
-    assign tx_valid = (book_busy_q && !book_busy);
-    assign tx_data  = best_bid[7:0]; // Send the lower 8 bits of the new best bid back to the PC
-    
+    // --- 3. Trading Logic ---
+    // Replaces the old temporary TX loopback
+    trading_logic TRADING_STRATEGY (
+        .clk(clk),
+        .reset(reset),
+        .best_bid(best_bid),
+        .best_ask(best_ask),
+        .book_busy(book_busy),
+        .tx_data(tx_data),      // Directly feeds UART TX
+        .tx_valid(tx_valid)     // Directly triggers UART TX
+    );
+
     // Update LEDs with the parsed Token ID for visual confirmation
     always_ff @(posedge clk) begin
         if (reset) debug_led <= 0;
