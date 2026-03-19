@@ -73,27 +73,31 @@ module hft_core (
     );
 
     // --- 2. Order Book Interconnects ---
-    order_t parsed_order;
+    order_t      parsed_order;
     logic [23:0] best_bid;
-    logic [23:0] best_ask; // NEW: Wire to catch the Best Ask from the Sell Book
-    logic book_busy;
+    logic [23:0] best_ask; 
+    logic [15:0] best_bid_qty;
+    logic [15:0] best_ask_qty;
+    logic        fifo_full;
     
-    // Pack the raw 1D Verilog wires into the SystemVerilog struct 
-    assign parsed_order.price = price;
-    assign parsed_order.order_id = token;
-    assign parsed_order.quantity = quantity[7:0]; // Casting 16-bit to 8-bit to fit our struct
+    // FIX 1: Correctly pack the full 80-bit order_t struct!
+    assign parsed_order.msg_type = msg_type;
+    assign parsed_order.token    = token;
+    assign parsed_order.side     = side;
+    assign parsed_order.price    = price;
+    assign parsed_order.quantity = quantity; // Strictly 16-bit!
+    assign parsed_order.flags    = flags;
 
-    // Instantiate Order Book
     order_book_top ORDER_BOOK (
         .clk(clk),
         .reset(reset),
-        .new_packet(parse_valid),
-        .msg_type(msg_type),
-        .side(side),                 // FIXED: Connect the side so it routes to Bid or Ask
+        .packet_valid(parse_valid),
         .parsed_order(parsed_order),
-        .best_bid(best_bid),         // Connects the highest buy price
-        .best_ask(best_ask),         // FIXED: Connects the lowest sell price
-        .busy(book_busy)
+        .best_bid(best_bid),         
+        .best_bid_qty(best_bid_qty),
+        .best_ask(best_ask),         
+        .best_ask_qty(best_ask_qty),
+        .fifo_full(fifo_full)
     );
 
     // --- 3. Trading Logic ---
@@ -103,9 +107,9 @@ module hft_core (
         .reset(reset),
         .best_bid(best_bid),
         .best_ask(best_ask),
-        .book_busy(book_busy),
-        .tx_data(tx_data),      // Directly feeds UART TX
-        .tx_valid(tx_valid)     // Directly triggers UART TX
+        .book_busy(fifo_full),  // Backpressure stall passed to trading engine
+        .tx_data(tx_data),      
+        .tx_valid(tx_valid)     
     );
 
     // Update LEDs with the parsed Token ID for visual confirmation

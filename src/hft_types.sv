@@ -21,13 +21,17 @@
 
 package hft_types;
 
-    // Define the Order structure to fit your 48-bit BRAM width
-    // Total Sum must be 48 bits
+    // 80-bit Parsed Order Structure
     typedef struct packed {
-        logic [23:0] price;    // 24 bits: Price
-        logic [15:0] order_id; // 16 bits: Order ID (Token)
-        logic [7:0]  quantity; // 8 bits:  Quantity
-    } order_t; // We call this new type 'order_t'
+        logic [7:0]  msg_type;
+        logic [15:0] token;       // order_id
+        logic [7:0]  side;
+        logic [23:0] price;
+        logic [15:0] quantity;
+        logic [7:0]  flags;
+    } order_t;
+    
+     typedef enum logic [1:0] {POP_FIFO, HASH_LOOKUP, FIRE_BOOK} ctrl_state_t;
 
     // Define States using Enum (Readable names instead of 0, 1, 2)
     typedef enum logic [1:0] {

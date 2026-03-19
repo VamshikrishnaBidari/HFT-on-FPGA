@@ -21,92 +21,133 @@
 
 
 `timescale 1ns / 1ps
-import hft_types::*;
+import hft_types::*; // BRINGING BACK THE STRUCTS!
 
-module order_book_half #(parameter IS_BID = 1) (
-    input logic clk,
-    input logic reset,
-    
-    input logic new_packet,
-    input logic [7:0] msg_type, 
-    input order_t parsed_order,
-    
-    output logic [23:0] best_price, 
-    output logic busy
+module order_book_half #(
+    parameter IS_BID = 1
+)(
+    input  logic        clk,
+    input  logic        reset,
+
+    // From Top-Level Router (Parser Output)
+    input  logic        packet_valid,
+    input  order_t      parsed_order_in,
+    output logic        fifo_full,
+
+    // Output to Trading Logic
+    output logic [23:0] best_price,
+    output logic [15:0] best_quantity
 );
 
-    logic [7:0] book_size;
-    logic mem_start, mem_we; logic [7:0] mem_addr;
-    order_t mem_data_in, mem_data_out; logic mem_valid;
+    // ---------------------------------------------------------
+    // 1. The Backpressure FIFO
+    // ---------------------------------------------------------
+    logic   fifo_empty, fifo_rd_en;
+    order_t current_order; // Struct pulled from FIFO
 
-    logic add_start, add_busy, add_mem_start, add_mem_we; logic [7:0] add_mem_addr, add_new_size;
-    order_t add_mem_data; logic [23:0] add_best_price;
-
-    logic dec_start, dec_busy, dec_mem_start, dec_mem_we; logic [7:0] dec_mem_addr, dec_new_size;
-    order_t dec_mem_data;
-
-    // The BRAM instance (Vivado allows multiple instances of the same IP)
-    memory_wrapper MEM_WRAP (
-        .clk(clk), .reset(reset), .start(mem_start), .is_write(mem_we),
-        .addr(mem_addr), .data_in(mem_data_in), .data_out(mem_data_out), .valid(mem_valid)
+    sync_fifo #(.WIDTH(80), .DEPTH(512)) INPUT_FIFO (
+        .clk(clk), .reset(reset),
+        .wr_en(packet_valid), .din(parsed_order_in), .full(fifo_full),
+        .rd_en(fifo_rd_en), .dout(current_order), .empty(fifo_empty)
     );
 
-    // Add Order (Passes the IS_BID parameter down)
-    add_order #(.IS_BID(IS_BID)) ADD_LOGIC (
-        .clk(clk), .reset(reset), .start(add_start), .valid(mem_valid), 
-        .price_valid(book_size > 0), .order(parsed_order), .price_distr(0), 
-        .cur_dpt(book_size), .best_price(best_price), .addr(add_mem_addr),
-        .mem_start(add_mem_start), .data_w(add_mem_data), .is_write(add_mem_we),
-        .ready(), .dpt_update(add_new_size), .add_best_price(add_best_price)
+    // ---------------------------------------------------------
+    // 2. Order ID Hash Map (For Cancels/Trades)
+    // ---------------------------------------------------------
+    logic        hash_we;
+    logic [23:0] hash_rd_price;
+    logic [15:0] hash_rd_qty;
+
+    order_id_map HASH_MAP (
+        .clk(clk),
+        .we(hash_we),
+        .wr_order_id(current_order.token),
+        .wr_price(current_order.price),
+        .wr_qty(current_order.quantity),
+        .rd_order_id(current_order.token),
+        .rd_price(hash_rd_price),
+        .rd_qty(hash_rd_qty)
     );
 
-    // Decrease Order
-    decrease_order DEC_LOGIC (
-        .clk(clk), .reset(reset), .start(dec_start),
-        .target_order_id(parsed_order.order_id), .decrease_qty(parsed_order.quantity),
-        .is_cancel_msg(msg_type == 8'h58), .current_book_size(book_size),
-        .read_data(mem_data_out), .read_valid(mem_valid), .mem_start(dec_mem_start),
-        .mem_write_en(dec_mem_we), .mem_addr(dec_mem_addr), .mem_data_w(dec_mem_data),
-        .busy(dec_busy), .new_book_size(dec_new_size)
+    // ---------------------------------------------------------
+    // 3. Circular BRAM & Top-K Storage
+    // ---------------------------------------------------------
+    logic        insert_valid, cancel_valid;
+    logic [23:0] active_price;
+    logic [15:0] active_qty;
+    logic        bram_busy;
+    
+    logic [23:0] bram_spill_price;
+    logic [15:0] bram_spill_qty;
+    logic [23:0] cache_bottom_price;
+
+    circular_sparse_bram #(.IS_BID(IS_BID)) BRAM_BOOK (
+        .clk(clk), .reset(reset),
+        .insert_valid(insert_valid), .cancel_valid(cancel_valid),
+        .price(active_price), .quantity(active_qty),
+        .cache_bottom_price(cache_bottom_price),
+        .bram_price_out(bram_spill_price), .bram_qty_out(bram_spill_qty),
+        .busy(bram_busy)
     );
 
-    typedef enum logic [1:0] {WAIT, ADDING, DECREASING} state_t;
-    state_t state;
+    topk_cache #(.K(4), .IS_BID(IS_BID)) TOP_K_CACHE (
+        .clk(clk), .reset(reset),
+        .insert_valid(insert_valid), .cancel_valid(cancel_valid), .execute_valid(1'b0),
+        .insert_price(active_price), .insert_quantity(active_qty),
+        .target_price(active_price), .execute_quantity(16'd0),
+        .bram_price(bram_spill_price), .bram_quantity(bram_spill_qty),
+        .best_price(best_price), .best_quantity(best_quantity),
+        .bottom_price(cache_bottom_price)
+    );
+
+    // ---------------------------------------------------------
+    // 4. Control FSM (FIFO Pop -> Hash Lookup -> BRAM Feed)
+    // ---------------------------------------------------------
+    ctrl_state_t ctrl_state;
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            state <= WAIT; book_size <= 0; best_price <= (IS_BID ? 0 : 24'hFFFFFF);
-            add_start <= 0; dec_start <= 0;
+            ctrl_state   <= POP_FIFO;
+            fifo_rd_en   <= 0;
+            hash_we      <= 0;
+            insert_valid <= 0;
+            cancel_valid <= 0;
         end else begin
-            add_start <= 0; dec_start <= 0;
+            // Defaults
+            fifo_rd_en   <= 0;
+            hash_we      <= 0;
+            insert_valid <= 0;
+            cancel_valid <= 0;
 
-            case (state)
-                WAIT: begin
-                    busy <= 0;
-                    if (new_packet) begin
-                        busy <= 1;
-                        if (msg_type == 8'h4E) begin 
-                            state <= ADDING; add_start <= 1;
-                        end else if (msg_type == 8'h58 || msg_type == 8'h54) begin 
-                            state <= DECREASING; dec_start <= 1;
-                        end
+            case (ctrl_state)
+                POP_FIFO: begin
+                    // Only pop if book is ready to accept and FIFO has data
+                    if (!fifo_empty && !bram_busy) begin
+                        fifo_rd_en <= 1; 
+                        ctrl_state <= HASH_LOOKUP;
                     end
                 end
-                ADDING: begin
-                    mem_start <= add_mem_start; mem_we <= add_mem_we;
-                    mem_addr <= add_mem_addr; mem_data_in <= add_mem_data;
-                    
-                    if (!add_mem_start && !add_start) begin 
-                       book_size <= add_new_size; best_price <= add_best_price; state <= WAIT;
-                    end
+
+                HASH_LOOKUP: begin
+                    // BRAM takes 1 cycle to read the Hash Map. 
+                    // If it's an Add ('N' = 8'h4E), trigger the Write-Enable for Hash Map.
+                    if (current_order.msg_type == 8'h4E) hash_we <= 1; 
+                    ctrl_state <= FIRE_BOOK;
                 end
-                DECREASING: begin
-                    mem_start <= dec_mem_start; mem_we <= dec_mem_we;
-                    mem_addr <= dec_mem_addr; mem_data_in <= dec_mem_data;
-                    
-                    if (!dec_busy && !dec_start) begin
-                        book_size <= dec_new_size; state <= WAIT;
+
+                FIRE_BOOK: begin
+                    if (current_order.msg_type == 8'h4E) begin 
+                        // ADD: Use price straight from packet
+                        active_price <= current_order.price;
+                        active_qty   <= current_order.quantity;
+                        insert_valid <= 1;
+                    end else if (current_order.msg_type == 8'h58 || current_order.msg_type == 8'h54) begin 
+                        // CANCEL/TRADE: Substitute price with data fetched from Hash Map
+                        active_price <= hash_rd_price; 
+                        active_qty   <= current_order.quantity; 
+                        cancel_valid <= 1;
                     end
+                    ctrl_state <= POP_FIFO;
                 end
             endcase
         end

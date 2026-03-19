@@ -23,38 +23,41 @@
 import hft_types::*;
 
 module order_book_top (
-    input logic clk,
-    input logic reset,
+    input  logic        clk,
+    input  logic        reset,
     
     // Inputs from Parser
-    input logic new_packet,
-    input logic [7:0] msg_type, // 'N', 'X', 'T'
-    input logic [7:0] side,     // 'B' (0x42) or 'S' (0x53)
-    input order_t parsed_order,
+    input  logic        packet_valid,
+    input  order_t      parsed_order,
     
     // Outputs to Trading Logic
     output logic [23:0] best_bid,
+    output logic [15:0] best_bid_qty,
     output logic [23:0] best_ask,
-    output logic busy
+    output logic [15:0] best_ask_qty,
+    
+    // Backpressure output to Parser (Stall signal)
+    output logic        fifo_full
 );
 
     // Independent routing signals
-    logic bid_start, ask_start;
-    logic bid_busy, ask_busy;
+    logic bid_valid, ask_valid;
+    logic bid_full, ask_full;
     
-    // The top module is busy if either half is busy
-    assign busy = bid_busy | ask_busy;
+    // The top module signals full if either FIFO gets full
+    assign fifo_full = bid_full | ask_full;
 
     // Combinational Router: Direct packets to the correct book
     always_comb begin
-        bid_start = 0;
-        ask_start = 0;
+        bid_valid = 0;
+        ask_valid = 0;
         
-        if (new_packet) begin
-            if (side == 8'h42) begin // Hex 42 is 'B' (Buy)
-                bid_start = 1;
-            end else if (side == 8'h53) begin // Hex 53 is 'S' (Sell)
-                ask_start = 1;
+        if (packet_valid) begin
+            // Extract side directly from the struct!
+            if (parsed_order.side == 8'h42) begin // Hex 42 is 'B' (Buy)
+                bid_valid = 1;
+            end else if (parsed_order.side == 8'h53) begin // Hex 53 is 'S' (Sell)
+                ask_valid = 1;
             end
         end
     end
@@ -65,11 +68,11 @@ module order_book_top (
     order_book_half #(.IS_BID(1)) BID_BOOK (
         .clk(clk),
         .reset(reset),
-        .new_packet(bid_start),
-        .msg_type(msg_type),
-        .parsed_order(parsed_order),
+        .packet_valid(bid_valid),
+        .parsed_order_in(parsed_order),
+        .fifo_full(bid_full),
         .best_price(best_bid),
-        .busy(bid_busy)
+        .best_quantity(best_bid_qty)
     );
 
     // ---------------------------------------------------------
@@ -78,11 +81,12 @@ module order_book_top (
     order_book_half #(.IS_BID(0)) ASK_BOOK (
         .clk(clk),
         .reset(reset),
-        .new_packet(ask_start),
-        .msg_type(msg_type),
-        .parsed_order(parsed_order),
+        .packet_valid(ask_valid),
+        .parsed_order_in(parsed_order),
+        .fifo_full(ask_full),
         .best_price(best_ask),
-        .busy(ask_busy)
+        .best_quantity(best_ask_qty)
     );
 
 endmodule
+
