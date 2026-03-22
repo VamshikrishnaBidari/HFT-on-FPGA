@@ -31,7 +31,8 @@ module parsing(
     output reg [7:0] side,
     output reg [23:0] price,
     output reg [15:0] quantity,
-    output reg [7:0] flags,      // ADDED: To parse the entire packet
+    output reg [3:0] stock_id,
+    output reg [3:0] flags,      // ADDED: To parse the entire packet
     output reg parse_valid
 );
 
@@ -42,6 +43,7 @@ module parsing(
             side <= 0;
             price <= 0;
             quantity <= 0;
+            stock_id <= 0;
             flags <= 0;
             parse_valid <= 0;
         end 
@@ -53,7 +55,8 @@ module parsing(
                 side     <= packet_in[63:56];   // Byte 4
                 price    <= packet_in[55:32];   // Bytes 5-7
                 quantity <= packet_in[31:16];   // Bytes 8-9
-                flags    <= packet_in[15:8];    // Byte 10
+                stock_id <= packet_in[15:12];   // Byte 10 (upper half)
+                flags    <= packet_in[11:8];    // Byte 10 (next half)
                 parse_valid <= 1;               // Valid Packet!
             end else begin
                 parse_valid <= 0;               // Corrupt packet, ignore it

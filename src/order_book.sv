@@ -26,7 +26,7 @@ module order_book_top (
     input  logic        clk,
     input  logic        reset,
     
-    // Inputs from Parser
+    // Inputs from Parser / Global Map
     input  logic        packet_valid,
     input  order_t      parsed_order,
     
@@ -36,16 +36,16 @@ module order_book_top (
     output logic [23:0] best_ask,
     output logic [15:0] best_ask_qty,
     
-    // Backpressure output to Parser (Stall signal)
+    // Backpressure output to Central FIFO (Stall signal)
     output logic        fifo_full
 );
 
     // Independent routing signals
     logic bid_valid, ask_valid;
-    logic bid_full, ask_full;
+    logic bid_busy, ask_busy;
     
-    // The top module signals full if either FIFO gets full
-    assign fifo_full = bid_full | ask_full;
+    // The top module signals full/busy if either half is busy processing
+    assign fifo_full = bid_busy | ask_busy;
 
     // Combinational Router: Direct packets to the correct book
     always_comb begin
@@ -70,7 +70,7 @@ module order_book_top (
         .reset(reset),
         .packet_valid(bid_valid),
         .parsed_order_in(parsed_order),
-        .fifo_full(bid_full),
+        .busy(bid_busy),                 // FIXED: Was fifo_full
         .best_price(best_bid),
         .best_quantity(best_bid_qty)
     );
@@ -83,10 +83,9 @@ module order_book_top (
         .reset(reset),
         .packet_valid(ask_valid),
         .parsed_order_in(parsed_order),
-        .fifo_full(ask_full),
+        .busy(ask_busy),                 // FIXED: Was fifo_full
         .best_price(best_ask),
         .best_quantity(best_ask_qty)
     );
 
 endmodule
-

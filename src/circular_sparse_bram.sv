@@ -491,7 +491,6 @@ module circular_sparse_bram #(
     logic       encoder_valid;
 
     hierarchical_encoder #(.IS_BID(IS_BID)) ENCODER (
-        .clk(clk),
         .mask_in(active_mask_reg),
         .best_index(best_index),
         .valid(encoder_valid)

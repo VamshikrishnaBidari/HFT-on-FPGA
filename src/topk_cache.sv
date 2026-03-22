@@ -91,7 +91,7 @@ module topk_cache #(
             end
         end else if (insert_valid) begin
             // --- FIX 1: EXACT MATCH AGGREGATION ---
-            logic exact_match_found;
+            automatic logic exact_match_found;
             exact_match_found = 1'b0;
             
             for (int i = 0; i < K; i++) begin
@@ -103,7 +103,7 @@ module topk_cache #(
             
             // --- PARALLEL INSERTION (Shift Down only if NOT a match) ---
             if (!exact_match_found) begin
-                logic already_inserted;
+                automatic logic already_inserted;
                 already_inserted = 1'b0;
                 for (int i = 0; i < K; i++) begin
                     if (is_better[i] && !already_inserted) begin
@@ -119,7 +119,7 @@ module topk_cache #(
             
         end else if (cancel_valid || execute_valid) begin
             // --- FIX 2: UNIFIED DECREASE & LAZY DELETION ---
-            logic shift_up;
+            automatic logic shift_up;
             shift_up = 1'b0;
             
             for (int i = 0; i < K; i++) begin

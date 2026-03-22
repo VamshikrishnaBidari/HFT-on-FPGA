@@ -78,7 +78,6 @@
 module hierarchical_encoder #(
     parameter IS_BID = 1
 )(
-    input  logic         clk,
     input  logic [511:0] mask_in,     // REDUCED: 512 bits
     output logic [8:0]   best_index,  // REDUCED: 9-bit index (0 to 511)
     output logic         valid

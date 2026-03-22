@@ -28,7 +28,8 @@ package hft_types;
         logic [7:0]  side;
         logic [23:0] price;
         logic [15:0] quantity;
-        logic [7:0]  flags;
+        logic [3:0]  stock_id;
+        logic [3:0]  flags;
     } order_t;
     
      typedef enum logic [1:0] {POP_FIFO, HASH_LOOKUP, FIRE_BOOK} ctrl_state_t;
